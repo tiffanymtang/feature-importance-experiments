@@ -75,15 +75,15 @@ def compare_estimators(estimators: List[ModelConfig],
         for splitting_strategy, fi_ests in fi_ests_dict.items():
             # implement provided splitting strategy
             if splitting_strategy is not None:
-                X_train, X_tune, X_test, y_train, y_tune, y_test = apply_splitting_strategy(
+                X_train, X_fi, X_test, y_train, y_fi, y_test = apply_splitting_strategy(
                     X, y, splitting_strategy, args.split_seed + rep
                 )
             else:
                 X_train = X
-                X_tune = X
+                X_fi = X
                 X_test = X
                 y_train = y
-                y_tune = y
+                y_fi = y
                 y_test = y
 
             # fit model
@@ -133,7 +133,7 @@ def compare_estimators(estimators: List[ModelConfig],
                     'splitting_strategy': splitting_strategy
                 }
                 start = time.time()
-                fi_score = fi_est.cls(X_test, y_test, copy.deepcopy(est), **fi_est.kwargs)
+                fi_score = fi_est.cls(X_fi, y_fi, copy.deepcopy(est), **fi_est.kwargs)
                 end = time.time()
                 if support is None:
                     fi_metric_results['fi_scores'] = copy.deepcopy(fi_score)
@@ -181,7 +181,7 @@ def run_comparison(rep: int,
                    args):
     estimator_name = estimators[0].name.split(' - ')[0]
     fi_estimators_all = [fi_estimator for fi_estimator in itertools.chain(*fi_estimators) \
-                         if fi_estimator.model_type in estimators[0].model_type]
+                         if fi_estimator.model_type == estimators[0].model_type]
     model_comparison_files_all = [oj(path, f'{estimator_name}_{fi_estimator.name}_comparisons.pkl') \
                                   for fi_estimator in fi_estimators_all]
     if args.parallel_id is not None:
@@ -372,15 +372,13 @@ if __name__ == '__main__':
         default_dir = oj(os.path.dirname(os.path.realpath(__file__)), 'results')
 
     parser.add_argument('--nreps', type=int, default=2)
-    parser.add_argument('--mode', type=str, default='survival')
-    # parser.add_argument('--mode', type=str, default='regression')
+    parser.add_argument('--mode', type=str, default='regression')
     parser.add_argument('--model', type=str, default=None)
     parser.add_argument('--fi_model', type=str, default=None)
-    parser.add_argument('--config', type=str, default='mdi_plus_survival.test')
-    # parser.add_argument('--config', type=str, default='test')
+    parser.add_argument('--config', type=str, default='locomp.test')
     parser.add_argument('--subsample_n', type=int, default=None)
     parser.add_argument('--omit_vars', type=str, default=None)  # comma-separated string of variables to omit
-    parser.add_argument('--nosave_cols', type=str, default=None)
+    parser.add_argument('--nosave_cols', type=str, default='prediction_model')
 
     # for multiple reruns, should support varying split_seed
     parser.add_argument('--ignore_cache', action='store_true', default=False)

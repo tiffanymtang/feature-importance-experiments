@@ -99,7 +99,7 @@ def tree_mdi_plus_ensemble(X, y, fit, scoring_fns="auto", **kwargs):
     return mdi_plus_ranks_df
 
 
-def tree_mdi_plus(X, y, fit, scoring_fns="auto", refit=True, mdiplus_kwargs=None,
+def tree_mdi_plus(X, y, fit, scoring_fns="auto", refit=True, mdiplus_kwargs={},
                   return_stability_scores=False, **kwargs):
     """
     Wrapper around MDI+ object to get feature importance scores

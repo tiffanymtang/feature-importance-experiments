@@ -68,7 +68,7 @@ class FIModelConfig:
         """
 
         assert splitting_strategy in {
-            'train-test', 'train-tune-test', 'train-test-lowdata', 'train-tune-test-lowdata',
+            'train-test', 'train-train-test', 'train-test-lowdata', 'train-train-test-lowdata',
             'train-test-prediction', None
         }
 
@@ -183,18 +183,17 @@ def apply_splitting_strategy(X: np.ndarray,
                              split_seed: str) -> Tuple[Any, Any, Any, Any, Any, Any]:
     if splitting_strategy in {'train-test-lowdata', 'train-tune-test-lowdata'}:
         test_size = 0.90  # X.shape[0] - X.shape[0] * 0.1
-    elif splitting_strategy == "train-test":
-        test_size = 0.33
     else:
         test_size = 0.2
 
     X_train, X_test, y_train, y_test = model_selection.train_test_split(
         X, y, test_size=test_size, random_state=split_seed)
-    X_tune = None
-    y_tune = None
 
-    if splitting_strategy in {'train-tune-test', 'train-tune-test-lowdata'}:
-        X_train, X_tune, y_train, y_tune = model_selection.train_test_split(
-            X_train, y_train, test_size=0.2, random_state=split_seed)
+    if splitting_strategy in {'train-train-test', 'train-train-test-lowdata'}:
+        X_fi = copy.deepcopy(X_train)
+        y_fi = copy.deepcopy(y_train)
+    else:
+        X_fi = copy.deepcopy(X_test)
+        y_fi = copy.deepcopy(y_test)
 
-    return X_train, X_tune, X_test, y_train, y_tune, y_test
+    return X_train, X_fi, X_test, y_train, y_fi, y_test
