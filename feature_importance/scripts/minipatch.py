@@ -1,4 +1,5 @@
 import copy
+from tqdm import tqdm
 import numpy as np
 import pandas as pd
 from abc import ABC, abstractmethod
@@ -40,13 +41,13 @@ class _MinipatchBase(BaseEstimator):
 
         n = self.train_n
         p = self.train_p
-        np.random.seed(self.random_state)
+        # np.random.seed(self.random_state)
 
         if sample_weight is None:
             sample_weight = self._get_default_sample_weight(y)
 
         # fit estimators on B minipatches
-        for b in range(self.B):
+        for b in tqdm(range(self.B)):
             idx_n, idx_p = self._get_mp_idxs(sample_weight)
             X_train = X[idx_n, :][:, idx_p]
             y_train = y[idx_n]
@@ -113,10 +114,12 @@ class _MinipatchBase(BaseEstimator):
             idx_mat[idx_p, b] = 1
         return idx_mat
 
-    def get_loco_importance(self, alpha=0.05, bonf=True):
+    def get_loco_importance(self, scoring_fn="auto", alpha=0.05, bonf=True):
         predictions = self.predictions_
         mp_samples_idx = self.get_mp_samples()
         mp_features_idx = self.get_mp_features()
+        if scoring_fn == "auto":
+            scoring_fn = self._get_default_loco_scorer()
 
         # compute LOCO predictions
         loco_preds = np.zeros((self.train_n, self.train_p))
@@ -135,20 +138,22 @@ class _MinipatchBase(BaseEstimator):
         for i in range(self.train_n):
             out_samples = mp_samples_idx[i, :] == 0
             keep_mp_idxs = np.argwhere(out_samples).reshape(-1)
-            loo_preds[i] = np.array(
-                [predictions[mp_idx][i] for mp_idx in keep_mp_idxs]
-            ).mean()
+            loo_preds[i] = np.mean(
+                [predictions[mp_idx][i] for mp_idx in keep_mp_idxs],
+                axis=0
+            )
             for j in range(self.train_p):
                 out_features = mp_features_idx[j, :] == 0
                 keep_mp_idxs = np.argwhere(out_samples & out_features).reshape(-1)
-                loco_preds[i, j] = np.array(
-                    [predictions[mp_idx][i] for mp_idx in keep_mp_idxs]
-                ).mean()
+                loco_preds[i, j] = np.mean(
+                    [predictions[mp_idx][i] for mp_idx in keep_mp_idxs],
+                    axis=0
+                )
 
         y_mat = np.repeat(self.y.reshape((self.train_n, 1)), self.train_p, axis=1)
-        loco_resids = np.abs(y_mat - loco_preds)
+        loco_resids = scoring_fn(y_mat, loco_preds)
         loo_resids = np.repeat(
-            np.abs(self.y - loo_preds).reshape(self.train_n, 1), self.train_p, axis=1
+            scoring_fn(self.y, loo_preds).reshape(self.train_n, 1), self.train_p, axis=1
         )
         loco_diff = loco_resids - loo_resids
         self.loo_resids_ = loo_resids
@@ -193,8 +198,14 @@ class _MinipatchBase(BaseEstimator):
         return [pval1, pval2, left_ci, right_ci]
 
     def _get_mp_idxs(self, sample_weight):
-        n_mp = int(self.train_n * self.n_ratio)
-        p_mp = int(self.train_p * self.p_ratio)
+        if self.n_ratio == 'sqrt':
+            n_mp = int(np.sqrt(self.train_n))
+        else:
+            n_mp = int(self.train_n * self.n_ratio)
+        if self.p_ratio == 'sqrt':
+            p_mp = int(np.sqrt(self.train_p))
+        else:
+            p_mp = int(self.train_p * self.p_ratio)
         idx_n = np.sort(np.random.choice(self.train_n, n_mp, replace=False, p=sample_weight))
         idx_p = np.sort(np.random.choice(self.train_p, p_mp, replace=False))
         return idx_n, idx_p
@@ -207,6 +218,9 @@ class _MinipatchBase(BaseEstimator):
     def _get_default_sample_weight(self, y):
         pass
 
+    @abstractmethod
+    def _get_default_scorer(self):
+        pass
 
 
 class MinipatchRegressor(_MinipatchBase, RegressorMixin):
@@ -225,6 +239,10 @@ class MinipatchRegressor(_MinipatchBase, RegressorMixin):
     def _get_default_sample_weight(self, y):
         return np.ones(len(y)) / len(y)
 
+    def _get_default_loco_scorer(self):
+        def scoring_fn(y_true, y_pred):
+            return np.abs(y_true - y_pred)
+        return scoring_fn
 
 class MinipatchClassifier(_MinipatchBase, ClassifierMixin):
     """
@@ -245,3 +263,9 @@ class MinipatchClassifier(_MinipatchBase, ClassifierMixin):
         y_pd = pd.merge(y_pd, y_groupn, left_on=0, right_index=True)
         weights = 1 / y_pd["0_y"].values
         return weights / np.sum(weights)
+
+    def _get_default_loco_scorer(self):
+        # TODO: update this (see getNC() in LOCOMP code)
+        def scoring_fn(y_true, y_pred):
+            return np.abs(y_true - y_pred)
+        return scoring_fn
