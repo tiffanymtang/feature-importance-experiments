@@ -1,5 +1,6 @@
 import os
 import sys
+import copy
 import pandas as pd
 import numpy as np
 import sklearn.base
@@ -12,7 +13,35 @@ from imodels.importance.rf_plus import RandomForestPlusRegressor, \
     RandomForestPlusClassifier, RandomForestPlusSurvival
 from feature_importance.scripts.mdi_oob import MDI_OOB
 from feature_importance.scripts.mda import MDA
+from feature_importance.scripts.minipatch import MinipatchRegressor, \
+    MinipatchClassifier
 
+
+def locomp(X, y, fit, refit=False, **kwargs):
+    """
+    Wrapper around LOCOMP object to get feature importance scores
+    :param X:
+    :param y:
+    :param fit:
+    :param refit:
+    :param kwargs:
+    :return:
+    """
+    if refit:
+        if isinstance(fit, RegressorMixin):
+            MP = MinipatchRegressor
+        elif isinstance(fit, ClassifierMixin):
+            MP = MinipatchClassifier
+        else:
+            raise ValueError("Unknown task.")
+        mp_model = MP(**kwargs)
+        mp_model.fit(X, y)
+    else:
+        mp_model = copy.deepcopy(fit)
+
+    locomp_scores = mp_model.get_loco_importance()
+    locomp_scores = locomp_scores.rename(columns={"pval_twosided": "importance"})
+    return locomp_scores
 
 def tree_mdi_plus_ensemble(X, y, fit, scoring_fns="auto", **kwargs):
     """
@@ -105,7 +134,7 @@ def tree_mdi_plus(X, y, fit, scoring_fns="auto", refit=True, mdiplus_kwargs=None
         rf_plus_model = RFPlus(rf_model=fit, **kwargs)
         rf_plus_model.fit(X, y)
     else:
-        rf_plus_model = fit
+        rf_plus_model = copy.deepcopy(fit)
     try:
         mdi_plus_scores = rf_plus_model.get_mdi_plus_scores(
             X=X, y=y, scoring_fns=scoring_fns, **mdiplus_kwargs
