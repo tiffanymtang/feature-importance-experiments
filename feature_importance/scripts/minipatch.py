@@ -114,23 +114,12 @@ class _MinipatchBase(BaseEstimator):
             idx_mat[idx_p, b] = 1
         return idx_mat
 
-    def get_loco_importance(self, scoring_fn="auto", alpha=0.05, bonf=True):
+    def get_loco_importance(self, scoring_fn="auto", alpha=0.05, bonf=False):
         predictions = self.predictions_
         mp_samples_idx = self.get_mp_samples()
         mp_features_idx = self.get_mp_features()
         if scoring_fn == "auto":
             scoring_fn = self._get_default_loco_scorer()
-
-        # compute LOCO predictions
-        loco_preds = np.zeros((self.train_n, self.train_p))
-        for i in range(self.train_n):
-            for j in range(self.train_p):
-                keep_mp_idxs = np.argwhere(
-                    (mp_samples_idx[i, :] == 0) & (mp_features_idx[j, :] == 0)
-                ).reshape(-1)
-                loco_preds[i, j] = np.array(
-                    [predictions[mp_idx][i] for mp_idx in keep_mp_idxs]
-                ).mean()
 
         # compute LOO/LOCO predictions
         loo_preds = np.zeros(self.train_n)
@@ -174,7 +163,7 @@ class _MinipatchBase(BaseEstimator):
         self.locomp_inf_.reset_index(inplace=True)
         return self.locomp_inf_
 
-    def _get_locomp_inf(self, z, alpha=0.05, n_tests=1, bonf=True):
+    def _get_locomp_inf(self, z, alpha=0.05, n_tests=1, bonf=False):
         try:
             s = np.nanstd(z)
         except:
@@ -243,6 +232,7 @@ class MinipatchRegressor(_MinipatchBase, RegressorMixin):
         def scoring_fn(y_true, y_pred):
             return np.abs(y_true - y_pred)
         return scoring_fn
+
 
 class MinipatchClassifier(_MinipatchBase, ClassifierMixin):
     """
