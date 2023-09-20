@@ -101,6 +101,66 @@ class _MinipatchBase(BaseEstimator):
                 predictions.append(estimator.predict_proba(X[:, idx_p]))
             # predictions = np.array(predictions).T
         return predictions
+    
+    def fit_predict(self, X, y, X_test, sample_weight=None, type='response'):
+        """
+        Fit the model to the given training data and predict on the given test data.
+        :param X: ndarray of shape (n_samples, n_features)
+            The covariate matrix.
+        :param y: ndarray of shape (n_samples,)
+            The observed responses.
+        :param X_test: ndarray of shape (n_test_samples, n_features)
+            The covariate matrix for the test data.
+        """
+        assert type in ['response', 'all']
+
+        self.mp_samples_ = []
+        self.mp_features_ = []
+        self.predictions_ = []
+        self.oob_predictions_ = None
+        self.oob_score_ = None
+        self.y = y
+        self.train_n = X.shape[0]
+        self.train_p = X.shape[1]
+
+        n = self.train_n
+        p = self.train_p
+        # np.random.seed(self.random_state)
+        if type == 'response':
+            test_preds = 0
+        elif type == 'all':
+            test_preds = []
+
+        if sample_weight is None:
+            sample_weight = self._get_default_sample_weight(y)
+
+        # fit estimators on B minipatches
+        for b in tqdm(range(self.B)):
+            idx_n, idx_p = self._get_mp_idxs(sample_weight)
+            X_train = X[idx_n, :][:, idx_p]
+            y_train = y[idx_n]
+            self.estimator.fit(X_train, y_train)
+            self.mp_samples_.append(idx_n)
+            self.mp_features_.append(idx_p)
+            if isinstance(self.estimator, ClassifierMixin):
+                preds = self.estimator.predict_proba(X[:, idx_p])
+            else:
+                preds = self.estimator.predict(X[:, idx_p])
+            self.predictions_.append(preds)
+            if type == 'response':
+                test_preds += self.estimator.predict(X_test[:, idx_p])
+            elif type == 'all':
+                test_preds.append(self.estimator.predict(X_test[:, idx_p]))    
+
+        # compute OOB predictions
+        preds_all = copy.deepcopy(self.predictions_)
+        for b, idx_n in enumerate(self.mp_samples_):
+            preds_all[b][idx_n] = np.nan
+        self.oob_predictions_ = np.nanmean(preds_all, axis=0)
+        self.oob_score_ = self._default_score(y, self.oob_predictions_)
+        if type == 'response':
+            test_preds = test_preds / self.B
+        return test_preds
 
     def get_mp_samples(self):
         idx_mat = np.zeros((self.train_n, self.B))

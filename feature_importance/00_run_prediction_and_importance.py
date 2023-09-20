@@ -87,16 +87,22 @@ def compare_estimators(estimators: List[ModelConfig],
                 y_test = y
 
             # fit model
-            start = time.time()
-            est.fit(X_train, y_train)
-            end = time.time()
+            # if model has method fit_predict, use it
+            if hasattr(est, 'fit_predict'):
+                start = time.time()
+                y_pred = est.fit_predict(X_train, y_train, X_test)
+                end = time.time()
+            else:
+                start = time.time()
+                est.fit(X_train, y_train)
+                end = time.time()
+                y_pred = est.predict(X_test)
 
             # prediction results
             pred_metric_results = {
                 'model': model.name,
                 'splitting_strategy': splitting_strategy
             }
-            y_pred = est.predict(X_test)
             if args.mode in ['binary_classification', 'multiclass_classification']:
                 y_pred_proba = est.predict_proba(X_test)
                 if args.mode == 'binary_classification':
