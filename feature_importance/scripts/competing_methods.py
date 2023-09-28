@@ -10,14 +10,14 @@ from functools import reduce
 
 import shap
 from imodels.importance.rf_plus import RandomForestPlusRegressor, \
-    RandomForestPlusClassifier, RandomForestPlusSurvival
+    RandomForestPlusClassifier#, RandomForestPlusSurvival
 from feature_importance.scripts.mdi_oob import MDI_OOB
 from feature_importance.scripts.mda import MDA
 from feature_importance.scripts.minipatch import MinipatchRegressor, \
     MinipatchClassifier
 
 
-def locomp(X, y, fit, refit=False, **kwargs):
+def locomp(X, y, fit, refit=False, importance_col="pval_onesided", **kwargs):
     """
     Wrapper around LOCOMP object to get feature importance scores
     :param X:
@@ -40,7 +40,7 @@ def locomp(X, y, fit, refit=False, **kwargs):
         mp_model = copy.deepcopy(fit)
 
     locomp_scores = mp_model.get_loco_importance()
-    locomp_scores = locomp_scores.rename(columns={"pval_twosided": "importance"})
+    locomp_scores = locomp_scores.rename(columns={importance_col: "importance"})
     return locomp_scores
 
 def tree_mdi_plus_ensemble(X, y, fit, scoring_fns="auto", **kwargs):

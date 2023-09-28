@@ -227,9 +227,9 @@ class _MinipatchBase(BaseEstimator):
         try:
             s = np.nanstd(z)
         except:
-            return [0, 0, 0, 0]
+            return [0, 0, 0, 0]   # should this be [1, 1, 0, 0]
         if s == 0:
-            return [0, 0, 0, 0]
+            return [0, 0, 0, 0]   # should this be [1, 1, 0, 0]
 
         n = np.sum(~np.isnan(z))
         m = np.nanmean(z)
