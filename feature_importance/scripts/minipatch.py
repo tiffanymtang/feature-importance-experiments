@@ -12,22 +12,38 @@ from scipy.stats import norm
 class _MinipatchBase(BaseEstimator):
     """
     Base class for minipatch estimators.
-    """
 
-    def __init__(self, estimator, n_ratio, p_ratio, B, random_state=None):
+    Parameters
+    ----------
+    estimator : sklearn-compatible object
+        The base estimator to fit on minipatches.
+    n_ratio : float or str
+        The ratio of samples to use in each minipatch. If 'sqrt', use sqrt(n) samples.
+    p_ratio : float or str
+        The ratio of features to use in each minipatch. If 'sqrt', use sqrt(p) features.
+    num_mps : int
+        The number of minipatches to use.
+    random_state : not yet implemented
+    """
+    def __init__(self, estimator, n_ratio, p_ratio, num_mps, random_state=None):
         self.estimator = estimator
         self.n_ratio = n_ratio
         self.p_ratio = p_ratio
-        self.B = B
+        self.num_mps = num_mps
         self.random_state = random_state
 
     def fit(self, X, y, sample_weight=None):
         """
         Fit the model to the given training data.
-        :param X: ndarray of shape (n_samples, n_features)
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
             The covariate matrix.
-        :param y: ndarray of shape (n_samples,)
+        y : ndarray of shape (n_samples,)
             The observed responses.
+        sample_weight : ndarray of shape (n_samples,), optional
+            Sample weights. If None, all samples are weighted equally.
         """
         self.estimators_ = []
         self.mp_samples_ = []
@@ -39,15 +55,18 @@ class _MinipatchBase(BaseEstimator):
         self.train_n = X.shape[0]
         self.train_p = X.shape[1]
 
+        if isinstance(self.estimator, ClassifierMixin):
+            self.classes_ = np.unique(y)
+
         n = self.train_n
         p = self.train_p
         # np.random.seed(self.random_state)
 
         if sample_weight is None:
-            sample_weight = self._get_default_sample_weight(y)
+            sample_weight = self._default_sample_weight(y)
 
-        # fit estimators on B minipatches
-        for b in tqdm(range(self.B)):
+        # fit estimators on num_mps minipatches
+        for k in tqdm(range(self.num_mps)):
             idx_n, idx_p = self._get_mp_idxs(sample_weight)
             X_train = X[idx_n, :][:, idx_p]
             y_train = y[idx_n]
@@ -56,25 +75,45 @@ class _MinipatchBase(BaseEstimator):
             self.mp_samples_.append(idx_n)
             self.mp_features_.append(idx_p)
             if isinstance(self.estimator, ClassifierMixin):
-                preds = self.estimator.predict_proba(X[:, idx_p])
+                preds = self._validate_classes(
+                    self.estimator.predict_proba(X[:, idx_p]),
+                    self.estimator.classes_
+                )
             else:
                 preds = self.estimator.predict(X[:, idx_p])
             self.predictions_.append(preds)
 
         # compute OOB predictions
         preds_all = copy.deepcopy(self.predictions_)
-        for b, idx_n in enumerate(self.mp_samples_):
-            preds_all[b][idx_n] = np.nan
+        for k, idx_n in enumerate(self.mp_samples_):
+            preds_all[k][idx_n] = np.nan
         self.oob_predictions_ = np.nanmean(preds_all, axis=0)
         self.oob_score_ = self._default_score(y, self.oob_predictions_)
 
     def predict(self, X, type='response'):
+        """
+        Predict on the given test data.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_test_samples, n_features)
+            The covariate matrix for the test data.
+        type : str, one of {'response', 'all'}
+            If 'response', return the average of the predictions from each minipatch.
+            If 'all', return the predictions from each minipatch.
+
+        Returns
+        -------
+        predictions : ndarray of shape (n_test_samples,) if type='response', or
+            ndarray of shape (n_test_samples, num_mps) if type='all'
+            The predictions.
+        """
         assert type in ['response', 'all']
         if type == 'response':
             predictions = 0
             for estimator, idx_p in zip(self.estimators_, self.mp_features_):
                 predictions += estimator.predict(X[:, idx_p])
-            predictions = predictions / self.B
+            predictions = predictions / self.num_mps
         elif type == 'all':
             predictions = []
             for estimator, idx_p in zip(self.estimators_, self.mp_features_):
@@ -83,6 +122,23 @@ class _MinipatchBase(BaseEstimator):
         return predictions
 
     def predict_proba(self, X, type='response'):
+        """
+        Predict class probabilities on the given test data.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_test_samples, n_features)
+            The covariate matrix for the test data.
+        type : str, one of {'response', 'all'}
+            If 'response', return the average of the class probability predictions from each minipatch.
+            If 'all', return the class probability predictions from each minipatch.
+
+        Returns
+        -------
+        predictions : ndarray of shape (n_test_samples, n_classes) if type='response', or
+            num_mps-length list of ndarrays of shape (n_test_samples, n_classes) if type='all'
+            The class probability predictions.
+        """
         assert type in ['response', 'all']
         X = check_array(X)
         check_is_fitted(self, "estimators_")
@@ -93,24 +149,48 @@ class _MinipatchBase(BaseEstimator):
         if type == 'response':
             predictions = 0
             for estimator, idx_p in zip(self.estimators_, self.mp_features_):
-                predictions += estimator.predict_proba(X[:, idx_p])
-            predictions = predictions / self.B
+                predictions += self._validate_classes(
+                    estimator.predict_proba(X[:, idx_p]),
+                    estimator.classes_
+                )
+            predictions = predictions / self.num_mps
         elif type == 'all':
             predictions = []
             for estimator, idx_p in zip(self.estimators_, self.mp_features_):
-                predictions.append(estimator.predict_proba(X[:, idx_p]))
-            # predictions = np.array(predictions).T
+                predictions.append(
+                    self._validate_classes(
+                        estimator.predict_proba(X[:, idx_p]),
+                        estimator.classes_
+                    )
+                )
         return predictions
     
     def fit_predict(self, X, y, X_test, sample_weight=None, type='response'):
         """
         Fit the model to the given training data and predict on the given test data.
-        :param X: ndarray of shape (n_samples, n_features)
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_samples, n_features)
             The covariate matrix.
-        :param y: ndarray of shape (n_samples,)
+        y : ndarray of shape (n_samples,)
             The observed responses.
-        :param X_test: ndarray of shape (n_test_samples, n_features)
+        X_test : ndarray of shape (n_test_samples, n_features)
             The covariate matrix for the test data.
+        sample_weight : ndarray of shape (n_samples,), optional
+            Sample weights. If None, all samples are weighted equally.
+        type : str, one of {'response', 'all'}
+            If 'response', return the average of the predictions from each minipatch.
+            If 'all', return the predictions from each minipatch.
+
+        Returns
+        -------
+        test_preds : ndarray of shape (n_test_samples,) if type='response', or
+            ndarray of shape (n_test_samples, num_mps) if type='all'
+            The predictions.
+        test_proba_preds: ndarray of shape (n_test_samples, n_classes) if type='response', or
+            num_mps-length list of ndarrays of shape (n_test_samples, n_classes) if type='all'
+            The class probability predictions. Only for MinipatchClassifier.
         """
         assert type in ['response', 'all']
 
@@ -123,6 +203,9 @@ class _MinipatchBase(BaseEstimator):
         self.train_n = X.shape[0]
         self.train_p = X.shape[1]
 
+        if isinstance(self.estimator, ClassifierMixin):
+            self.classes_ = np.unique(y)
+
         n = self.train_n
         p = self.train_p
         # np.random.seed(self.random_state)
@@ -130,62 +213,127 @@ class _MinipatchBase(BaseEstimator):
             test_preds = 0
         elif type == 'all':
             test_preds = []
+        if isinstance(self.estimator, ClassifierMixin):
+            def pred_fun(x): 
+                return self._validate_classes(
+                    self.estimator.predict_proba(x),
+                    self.estimator.classes_
+                )
+        else:
+            pred_fun = self.estimator.predict
 
         if sample_weight is None:
-            sample_weight = self._get_default_sample_weight(y)
+            sample_weight = self._default_sample_weight(y)
 
-        # fit estimators on B minipatches
-        for b in tqdm(range(self.B)):
+        # fit estimators on num_mps minipatches
+        for k in tqdm(range(self.num_mps)):
             idx_n, idx_p = self._get_mp_idxs(sample_weight)
             X_train = X[idx_n, :][:, idx_p]
             y_train = y[idx_n]
             self.estimator.fit(X_train, y_train)
             self.mp_samples_.append(idx_n)
             self.mp_features_.append(idx_p)
-            if isinstance(self.estimator, ClassifierMixin):
-                preds = self.estimator.predict_proba(X[:, idx_p])
-            else:
-                preds = self.estimator.predict(X[:, idx_p])
+            preds = pred_fun(X[:, idx_p])
             self.predictions_.append(preds)
             if type == 'response':
-                test_preds += self.estimator.predict(X_test[:, idx_p])
+                test_preds += pred_fun(X_test[:, idx_p])
             elif type == 'all':
-                test_preds.append(self.estimator.predict(X_test[:, idx_p]))    
+                test_preds.append(pred_fun(X_test[:, idx_p]))
 
         # compute OOB predictions
         preds_all = copy.deepcopy(self.predictions_)
-        for b, idx_n in enumerate(self.mp_samples_):
-            preds_all[b][idx_n] = np.nan
+        for k, idx_n in enumerate(self.mp_samples_):
+            preds_all[k][idx_n] = np.nan
         self.oob_predictions_ = np.nanmean(preds_all, axis=0)
         self.oob_score_ = self._default_score(y, self.oob_predictions_)
         if type == 'response':
-            test_preds = test_preds / self.B
-        return test_preds
+            test_preds = test_preds / self.num_mps
+
+        if isinstance(self.estimator, ClassifierMixin):
+            if type == 'response':
+                test_proba_preds = test_preds
+                test_preds = self.classes_[np.argmax(test_preds, axis=1)]
+            else:
+                test_proba_preds = test_preds
+                test_preds = np.array([
+                    self.classes_[np.argmax(test_pred, axis=1)] for test_pred in test_preds
+                ]).T
+            return test_preds, test_proba_preds
+        else:
+            return test_preds
 
     def get_mp_samples(self):
-        idx_mat = np.zeros((self.train_n, self.B))
-        for b, idx_n in enumerate(self.mp_samples_):
-            idx_mat[idx_n, b] = 1
+        """
+        Get the indicator matrix of samples used in each minipatch.
+
+        Returns
+        -------
+        idx_mat : ndarray of shape (n_samples, num_mps)
+            The indicator matrix of samples used in each minipatch.
+        """
+        idx_mat = np.zeros((self.train_n, self.num_mps))
+        for k, idx_n in enumerate(self.mp_samples_):
+            idx_mat[idx_n, k] = 1
         return idx_mat
 
     def get_mp_features(self):
-        idx_mat = np.zeros((self.train_p, self.B))
-        for b, idx_p in enumerate(self.mp_features_):
-            idx_mat[idx_p, b] = 1
+        """
+        Get the indicator matrix of features used in each minipatch.
+
+        Returns
+        -------
+        idx_mat : ndarray of shape (n_features, num_mps)
+            The indicator matrix of features used in each minipatch.
+        """
+        idx_mat = np.zeros((self.train_p, self.num_mps))
+        for k, idx_p in enumerate(self.mp_features_):
+            idx_mat[idx_p, k] = 1
         return idx_mat
 
     def get_loco_importance(self, scoring_fn="auto", alpha=0.05, bonf=False, 
                             epsilon=0.0001, num_mp_B=10):
+        """
+        Compute leave-one-covariate-out (LOCO) minipatch importance scores.
+
+        Parameters
+        ----------
+        scoring_fn : callable or str, default='auto'
+            If 'auto', use the default scoring function for the estimator.
+            For regressors, the deafult is the absolute residual. For classifiers, the
+            default is the absolute difference between the predicted probability of the 
+            true class and 1. If callable, use the scoring function provided.
+        alpha : float, default=0.05
+            The significance level.
+        bonf : bool, default=False
+            Whether to apply Bonferroni correction for multiple testing.
+        epsilon : float, default=0.0001
+            The normalization constant in the variance barrier calculation.
+        num_mp_B : int, default=10
+            The number of minipatch pairs to use for computing the
+            constant B in the variance barrier.
+
+        Returns
+        -------
+        loco_inf : DataFrame of shape (n_features, 4)
+            The LOCO minipatch inference results, with columns
+            "pval_onesided", "pval_twosided", "lower_ci", "upper_ci"
+            giving the one-sided pvalue, two-sided pvalue, lower confidence
+            interval, and upper confidence interval for each covariate.
+        """
         predictions = self.predictions_
         mp_samples_idx = self.get_mp_samples()
         mp_features_idx = self.get_mp_features()
         if scoring_fn == "auto":
-            scoring_fn = self._get_default_loco_scorer()
+            scoring_fn = self._default_loco_scorer()
 
         # compute LOO/LOCO predictions
-        loo_preds = np.zeros(self.train_n)
-        loco_preds = np.zeros((self.train_n, self.train_p))
         loo_preds_diff = np.zeros(self.train_n)
+        if predictions[0].ndim == 1:
+            loo_preds = np.zeros(self.train_n)
+            loco_preds = np.zeros((self.train_n, self.train_p))
+        else:
+            loo_preds = np.zeros((self.train_n, predictions[0].shape[1]))
+            loco_preds = np.zeros((self.train_n, self.train_p, predictions[0].shape[1]))
         for i in range(self.train_n):
             out_samples = mp_samples_idx[i, :] == 0
             loo_mp_idxs = np.argwhere(out_samples).reshape(-1)
@@ -245,6 +393,30 @@ class _MinipatchBase(BaseEstimator):
         return self.locomp_inf_
 
     def _get_locomp_inf(self, z, alpha=0.05, n_tests=1, bonf=False, min_var=0):
+        """
+        Compute inference for LOCO minipatch importance scores via normal approximation.
+
+        Parameters
+        ----------
+        z : ndarray of shape (n_samples,)
+            The LOCO minipatch importance scores.
+        alpha : float, default=0.05
+            The significance level.
+        n_tests : int, default=1
+            The number of tests being performed.
+        bonf : bool, default=False
+            Whether to apply Bonferroni correction for multiple testing.
+        min_var : float, default=0
+            The minimum variance barrier.
+
+        Returns
+        -------
+        inf : ndarray of shape (4,)
+            The inference results, with entries
+            "pval_onesided", "pval_twosided", "lower_ci", "upper_ci"
+            giving the one-sided pvalue, two-sided pvalue, lower confidence
+            interval, and upper confidence interval.
+        """
         try:
             s = np.nanstd(z)
         except:
@@ -269,6 +441,21 @@ class _MinipatchBase(BaseEstimator):
         return [pval1, pval2, left_ci, right_ci]
 
     def _get_mp_idxs(self, sample_weight):
+        """
+        Get the indices of the samples and features to use in the minipatch.
+
+        Parameters
+        ----------
+        sample_weight : ndarray of shape (n_samples,)
+            The sample weights.
+
+        Returns
+        -------
+        idx_n : ndarray of shape (n_mp_samples,)
+            The indices of the samples to use in the minipatch.
+        idx_p : ndarray of shape (n_mp_features,)
+            The indices of the features to use in the minipatch.
+        """
         if self.n_ratio == 'sqrt':
             n_mp = int(np.sqrt(self.train_n))
         else:
@@ -282,6 +469,19 @@ class _MinipatchBase(BaseEstimator):
         return idx_n, idx_p
     
     def _get_variance_barrier(self, epsilon):
+        """
+        Compute the variance barrier for minipatch inference.
+
+        Parameters
+        ----------
+        epsilon : float
+            The normalization constant in the variance barrier calculation.
+
+        Returns
+        -------
+        min_var : float
+            The minimum variance barrier.
+        """
         if self.n_ratio == 'sqrt':
             n_ratio = np.sqrt(self.train_n) / self.train_n
         else:
@@ -292,14 +492,25 @@ class _MinipatchBase(BaseEstimator):
 
     @abstractmethod
     def _default_score(self, y_true, y_pred):
+        """
+        Default scoring function to score/evaluate
+        the minipatch predictions.
+        """
         pass
 
     @abstractmethod
-    def _get_default_sample_weight(self, y):
+    def _default_sample_weight(self, y):
+        """
+        Compute the default sample weights.
+        """
         pass
 
     @abstractmethod
-    def _get_default_scorer(self):
+    def _default_loco_scorer(self):
+        """
+        Default scoring function to score/evaluate
+        the LOCO minipatch importance scores.
+        """
         pass
 
 
@@ -309,17 +520,48 @@ class MinipatchRegressor(_MinipatchBase, RegressorMixin):
     """
     def _default_score(self, y_true, y_pred):
         """
-        Compute MSE.
-        :param y_true:
-        :param y_pred:
-        :return:
+        Compute MSE. Default scorer to evaluate minipatch predictions.
+
+        Parameters
+        ----------
+        y_true : ndarray of shape (n_samples,)
+            The true responses.
+        y_pred : ndarray of shape (n_samples,)
+            The predicted responses.
+
+        Returns
+        -------
+        mse : float
+            The mean squared error.
         """
         return np.mean((y_true - y_pred) ** 2)
 
-    def _get_default_sample_weight(self, y):
+    def _default_sample_weight(self, y):
+        """
+        Uniform sample weights. Default sample weights for minipatch fitting.
+
+        Parameters
+        ----------
+        y : ndarray of shape (n_samples,)
+            The observed responses.
+
+        Returns
+        -------
+        weights : ndarray of shape (n_samples,)
+            The sample weights.
+        """
         return np.ones(len(y)) / len(y)
 
-    def _get_default_loco_scorer(self):
+    def _default_loco_scorer(self):
+        """
+        Function to compute absolute residuals. Default scoring function to 
+        score/evaluate the LOCO minipatch importance scores.
+
+        Returns
+        -------
+        scoring_fn : callable
+            The scoring function.
+        """
         def scoring_fn(y_true, y_pred):
             return np.abs(y_true - y_pred)
         return scoring_fn
@@ -329,24 +571,128 @@ class MinipatchClassifier(_MinipatchBase, ClassifierMixin):
     """
     Minipatch classifier.
     """
+
+    def predict(self, X, type='response'):
+        """
+        Predict on the given test data.
+
+        Parameters
+        ----------
+        X : ndarray of shape (n_test_samples, n_features)
+            The covariate matrix for the test data.
+        type : str, one of {'response', 'all'}
+            If 'response', return the average of the predictions from each minipatch.
+            If 'all', return the predictions from each minipatch.
+
+        Returns
+        -------
+        predictions : ndarray of shape (n_test_samples,) if type='response', or
+            ndarray of shape (n_test_samples, num_mps) if type='all'
+            The predictions.
+        """
+        assert type in ['response', 'all']
+        if type == 'response':
+            predictions = 0
+            for estimator, idx_p in zip(self.estimators_, self.mp_features_):
+                predictions += self._validate_classes(
+                    estimator.predict_proba(X[:, idx_p]),
+                    estimator.classes_
+                )
+            predictions = self.classes_[np.argmax(predictions, axis=1)]
+        elif type == 'all':
+            predictions = []
+            for estimator, idx_p in zip(self.estimators_, self.mp_features_):
+                predictions.append(
+                    self._validate_classes(
+                        estimator.predict(X[:, idx_p]),
+                        estimator.classes_
+                    )
+                )
+            predictions = np.array(predictions).T
+        return predictions
+    
+    def _validate_classes(self, predictions, classes):
+        """
+        Reorder the predictions from an estimator to match the order 
+        of the minipatch estimator classes.
+        
+        Parameters
+        ----------
+        predictions : ndarray of shape (n_samples, n_classes)
+            The class probability predictions.
+        classes : ndarray of shape (n_classes,)
+            The classes of the estimator.
+
+        Returns
+        -------
+        reordered_preds : ndarray of shape (n_samples, n_classes)
+            The reordered class probability predictions.
+        """
+        if np.array_equal(self.classes_, classes):
+            return predictions
+        else:
+            reordered_preds = np.zeros(
+                (predictions.shape[0], len(self.classes_))
+            )
+            for i, c in enumerate(self.classes_):
+                if c in classes:
+                    reordered_preds[:, i] = predictions[:, np.where(classes == c)[0]][:, 0]
+            return reordered_preds
+
     def _default_score(self, y_true, y_pred):
         """
-        Compute accuracy.
-        :param y_true:
-        :param y_pred:
-        :return:
-        """
-        return np.mean(y_true == y_pred)
+        Compute accuracy. Default scorer to evaluate minipatch predictions.
 
-    def _get_default_sample_weight(self, y):
+        Parameters
+        ----------
+        y_true : ndarray of shape (n_samples,)
+            The true responses.
+        y_pred : ndarray of shape (n_samples,)
+            The predicted responses.
+
+        Returns
+        -------
+        acc : float
+            The accuracy.
+        """
+        y_pred_classes = self.classes_[np.argmax(y_pred, axis=1)]
+        return np.mean(y_true == y_pred_classes)
+
+    def _default_sample_weight(self, y):
+        """
+        Compute sample weights as the inverse of the class frequencies.
+        This is to achieve balanced sampling across classes.
+
+        Parameters
+        ----------
+        y : ndarray of shape (n_samples,)
+            The observed responses.
+
+        Returns
+        -------
+        weights : ndarray of shape (n_samples,)
+            The sample weights.
+        """
         y_pd = pd.DataFrame(y.reshape((len(y), 1)))
         y_groupn = pd.DataFrame(y_pd.groupby(0).apply(lambda x: len(x)))
         y_pd = pd.merge(y_pd, y_groupn, left_on=0, right_index=True)
         weights = 1 / y_pd["0_y"].values
         return weights / np.sum(weights)
 
-    def _get_default_loco_scorer(self):
-        # TODO: update this (see getNC() in LOCOMP code)
+    def _default_loco_scorer(self):
+        """
+        Function to compute absolute difference between the predicted probability of the
+        true class and 1. Default scoring function to score/evaluate the LOCO minipatch
+        importance scores.
+
+        Returns
+        -------
+        scoring_fn : callable
+            The scoring function.
+        """
         def scoring_fn(y_true, y_pred):
-            return np.abs(y_true - y_pred)
+            score = np.zeros(y_true.shape)
+            for idx, val in np.ndenumerate(y_true):
+                score[idx] = np.abs(1 - y_pred[idx][y_true[idx]])
+            return score
         return scoring_fn
