@@ -175,7 +175,7 @@ class _MinipatchBase(BaseEstimator):
         return idx_mat
 
     def get_loco_importance(self, scoring_fn="auto", alpha=0.05, bonf=False, 
-                            epsilon=0.0001, B=10):
+                            epsilon=0.0001, num_mp_B=10):
         predictions = self.predictions_
         mp_samples_idx = self.get_mp_samples()
         mp_features_idx = self.get_mp_features()
@@ -185,7 +185,7 @@ class _MinipatchBase(BaseEstimator):
         # compute LOO/LOCO predictions
         loo_preds = np.zeros(self.train_n)
         loco_preds = np.zeros((self.train_n, self.train_p))
-        loo_preds_stability = np.zeros(self.train_n)
+        loo_preds_diff = np.zeros(self.train_n)
         for i in range(self.train_n):
             out_samples = mp_samples_idx[i, :] == 0
             loo_mp_idxs = np.argwhere(out_samples).reshape(-1)
@@ -195,15 +195,15 @@ class _MinipatchBase(BaseEstimator):
             )
             if epsilon > 0:  # for computing variance barrier
                 loo_mp_idxs_subset = np.random.choice(
-                    loo_mp_idxs, size=B * 2, replace=False
-                ).reshape((B, 2))
+                    loo_mp_idxs, size=num_mp_B * 2, replace=False
+                ).reshape((num_mp_B, 2))
                 predictions_subset1 = np.array([
                     predictions[mp_idx][i] for mp_idx in loo_mp_idxs_subset[:, 0]
                 ])
                 predictions_subset2 = np.array([
                     predictions[mp_idx][i] for mp_idx in loo_mp_idxs_subset[:, 1]
                 ])
-                loo_preds_stability[i] = np.square(
+                loo_preds_diff[i] = np.square(
                     predictions_subset1 - predictions_subset2
                 ).mean()
             for j in range(self.train_p):
@@ -223,7 +223,7 @@ class _MinipatchBase(BaseEstimator):
         self.loo_resids_ = loo_resids
         self.loco_resids_ = loco_resids
         self.locomp_scores_ = loco_diff
-        self.loo_preds_stability_ = loo_preds_stability
+        self.loo_preds_diff_ = loo_preds_diff
 
         # compute variance barrier
         min_var = self._get_variance_barrier(epsilon)
@@ -286,7 +286,7 @@ class _MinipatchBase(BaseEstimator):
             n_ratio = np.sqrt(self.train_n) / self.train_n
         else:
             n_ratio = self.n_ratio
-        min_var = np.sqrt(np.mean(self.loo_preds_stability_)) *\
+        min_var = np.sqrt(np.mean(self.loo_preds_diff_)) *\
             np.log(self.train_n) * n_ratio * epsilon
         return min_var
 
