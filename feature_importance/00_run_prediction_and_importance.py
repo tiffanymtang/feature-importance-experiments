@@ -92,23 +92,30 @@ def compare_estimators(estimators: List[ModelConfig],
                 start = time.time()
                 y_pred = est.fit_predict(X_train, y_train, X_test)
                 end = time.time()
+                if args.mode in ['binary_classification', 'multiclass_classification']:
+                    y_pred_proba = y_pred[1]
+                    y_pred = y_pred[0]
+                    if args.mode == 'binary_classification':
+                        y_pred_proba = y_pred_proba[:, 1]
+                else:
+                    y_pred_proba = y_pred
             else:
                 start = time.time()
                 est.fit(X_train, y_train)
                 end = time.time()
                 y_pred = est.predict(X_test)
+                if args.mode in ['binary_classification', 'multiclass_classification']:
+                    y_pred_proba = est.predict_proba(X_test)
+                    if args.mode == 'binary_classification':
+                        y_pred_proba = y_pred_proba[:, 1]
+                else:
+                    y_pred_proba = y_pred
 
             # prediction results
             pred_metric_results = {
                 'model': model.name,
                 'splitting_strategy': splitting_strategy
             }
-            if args.mode in ['binary_classification', 'multiclass_classification']:
-                y_pred_proba = est.predict_proba(X_test)
-                if args.mode == 'binary_classification':
-                    y_pred_proba = y_pred_proba[:, 1]
-            else:
-                y_pred_proba = y_pred
             for met_name, met in metrics:
                 if met is not None:
                     if met_name in ["rocauc", "prauc", "logloss", "avg_precision"]:
@@ -378,10 +385,14 @@ if __name__ == '__main__':
         default_dir = oj(os.path.dirname(os.path.realpath(__file__)), 'results')
 
     parser.add_argument('--nreps', type=int, default=2)
-    parser.add_argument('--mode', type=str, default='regression')
+    # parser.add_argument('--mode', type=str, default='regression')
+    parser.add_argument('--mode', type=str, default='binary_classification')
+    # parser.add_argument('--mode', type=str, default='multiclass_classification')
     parser.add_argument('--model', type=str, default=None)
     parser.add_argument('--fi_model', type=str, default=None)
-    parser.add_argument('--config', type=str, default='locomp.test')
+    # parser.add_argument('--config', type=str, default='locomp.linear_gaussian_small_p_low_snr_dgp-')
+    parser.add_argument('--config', type=str, default='locomp.test_logistic')
+    # parser.add_argument('--config', type=str, default='locomp.test_multiclass')
     parser.add_argument('--subsample_n', type=int, default=None)
     parser.add_argument('--omit_vars', type=str, default=None)  # comma-separated string of variables to omit
     parser.add_argument('--nosave_cols', type=str, default='prediction_model')
