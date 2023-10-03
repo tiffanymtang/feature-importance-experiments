@@ -174,7 +174,8 @@ class _MinipatchBase(BaseEstimator):
             idx_mat[idx_p, b] = 1
         return idx_mat
 
-    def get_loco_importance(self, scoring_fn="auto", alpha=0.05, bonf=False):
+    def get_loco_importance(self, scoring_fn="auto", alpha=0.05, bonf=False, 
+                            epsilon=0.0001, B=10):
         predictions = self.predictions_
         mp_samples_idx = self.get_mp_samples()
         mp_features_idx = self.get_mp_features()
@@ -184,18 +185,32 @@ class _MinipatchBase(BaseEstimator):
         # compute LOO/LOCO predictions
         loo_preds = np.zeros(self.train_n)
         loco_preds = np.zeros((self.train_n, self.train_p))
+        loo_preds_stability = np.zeros(self.train_n)
         for i in range(self.train_n):
             out_samples = mp_samples_idx[i, :] == 0
-            keep_mp_idxs = np.argwhere(out_samples).reshape(-1)
+            loo_mp_idxs = np.argwhere(out_samples).reshape(-1)
             loo_preds[i] = np.mean(
-                [predictions[mp_idx][i] for mp_idx in keep_mp_idxs],
+                [predictions[mp_idx][i] for mp_idx in loo_mp_idxs],
                 axis=0
             )
+            if epsilon > 0:  # for computing variance barrier
+                loo_mp_idxs_subset = np.random.choice(
+                    loo_mp_idxs, size=B * 2, replace=False
+                ).reshape((B, 2))
+                predictions_subset1 = np.array([
+                    predictions[mp_idx][i] for mp_idx in loo_mp_idxs_subset[:, 0]
+                ])
+                predictions_subset2 = np.array([
+                    predictions[mp_idx][i] for mp_idx in loo_mp_idxs_subset[:, 1]
+                ])
+                loo_preds_stability[i] = np.square(
+                    predictions_subset1 - predictions_subset2
+                ).mean()
             for j in range(self.train_p):
                 out_features = mp_features_idx[j, :] == 0
-                keep_mp_idxs = np.argwhere(out_samples & out_features).reshape(-1)
+                loco_mp_idxs = np.argwhere(out_samples & out_features).reshape(-1)
                 loco_preds[i, j] = np.mean(
-                    [predictions[mp_idx][i] for mp_idx in keep_mp_idxs],
+                    [predictions[mp_idx][i] for mp_idx in loco_mp_idxs],
                     axis=0
                 )
 
@@ -208,12 +223,18 @@ class _MinipatchBase(BaseEstimator):
         self.loo_resids_ = loo_resids
         self.loco_resids_ = loco_resids
         self.locomp_scores_ = loco_diff
+        self.loo_preds_stability_ = loo_preds_stability
+
+        # compute variance barrier
+        min_var = self._get_variance_barrier(epsilon)
+        self.min_var = min_var
 
         # do inference
         self.locomp_inf_ = np.zeros((self.train_p, 4))
         for j in range(self.train_p):
             self.locomp_inf_[j] = self._get_locomp_inf(
-                loco_diff[:, j], alpha=alpha, n_tests=self.train_p, bonf=bonf
+                loco_diff[:, j], alpha=alpha, n_tests=self.train_p, 
+                bonf=bonf, min_var=min_var
             )
         self.locomp_inf_ = pd.DataFrame(
             self.locomp_inf_,
@@ -223,7 +244,7 @@ class _MinipatchBase(BaseEstimator):
         self.locomp_inf_.reset_index(inplace=True)
         return self.locomp_inf_
 
-    def _get_locomp_inf(self, z, alpha=0.05, n_tests=1, bonf=False):
+    def _get_locomp_inf(self, z, alpha=0.05, n_tests=1, bonf=False, min_var=0):
         try:
             s = np.nanstd(z)
         except:
@@ -233,8 +254,9 @@ class _MinipatchBase(BaseEstimator):
 
         n = np.sum(~np.isnan(z))
         m = np.nanmean(z)
-        pval1 = 1 - norm.cdf(m / s * np.sqrt(n))  # one-sided
-        pval2 = 2 * (1 - norm.cdf(np.abs(m / s * np.sqrt(n))))  # two-sided
+        sigma = s / np.sqrt(n) + min_var
+        pval1 = 1 - norm.cdf(m / sigma)  # one-sided
+        pval2 = 2 * (1 - norm.cdf(np.abs(m / sigma)))  # two-sided
 
         # Apply Bonferroni correction for M tests
         if bonf:
@@ -242,8 +264,8 @@ class _MinipatchBase(BaseEstimator):
             pval2 = min(n_tests * pval2, 1)
             alpha = alpha / n_tests
         q = norm.ppf(1 - alpha / 2)
-        left_ci = m - q * s / np.sqrt(n)
-        right_ci = m + q * s / np.sqrt(n)
+        left_ci = m - q * sigma
+        right_ci = m + q * sigma
         return [pval1, pval2, left_ci, right_ci]
 
     def _get_mp_idxs(self, sample_weight):
@@ -258,6 +280,15 @@ class _MinipatchBase(BaseEstimator):
         idx_n = np.sort(np.random.choice(self.train_n, n_mp, replace=False, p=sample_weight))
         idx_p = np.sort(np.random.choice(self.train_p, p_mp, replace=False))
         return idx_n, idx_p
+    
+    def _get_variance_barrier(self, epsilon):
+        if self.n_ratio == 'sqrt':
+            n_ratio = np.sqrt(self.train_n) / self.train_n
+        else:
+            n_ratio = self.n_ratio
+        min_var = np.sqrt(np.mean(self.loo_preds_stability_)) *\
+            np.log(self.train_n) * n_ratio * epsilon
+        return min_var
 
     @abstractmethod
     def _default_score(self, y_true, y_pred):
