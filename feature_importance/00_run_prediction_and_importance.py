@@ -407,6 +407,10 @@ if __name__ == '__main__':
     parser.add_argument('--split_seed', type=int, default=0)
     parser.add_argument('--results_path', type=str, default=default_dir)
 
+    # arguments for rmd output of results
+    parser.add_argument('--create_rmd', action='store_true', default=False)
+    parser.add_argument('--show_vars', type=int, default=None)
+
     args = parser.parse_args()
 
     # assert args.splitting_strategy in {
@@ -646,4 +650,27 @@ if __name__ == '__main__':
         results_df.to_csv(oj(path, f'{result_type}_results_full.csv'), index=False)
 
     print('merged and saved all experiment results successfully!')
+
+    # create R markdown summary of results
+    if args.create_rmd:
+        if args.show_vars is None:
+            show_vars = 'NULL'
+        else:
+            show_vars = args.show_vars
+
+        if isinstance(vary_param_name, list):
+            vary_param_name = "; ".join(vary_param_name)
+
+        sim_rmd = os.path.basename(results_dir) + '_results.Rmd'
+        os.system(
+            'cp {} \'{}\''.format(oj("rmd", "results_template.Rmd"), sim_rmd)
+        )
+        os.system(
+            'Rscript -e "rmarkdown::render(\'{}\', params = list(results_dir = \'{}\', vary_param_name = \'{}\', seed = {}, keep_vars = {}), output_file = \'{}\', quiet = TRUE)"'.format(
+                sim_rmd,
+                results_dir, vary_param_name, str(args.split_seed), str(show_vars),
+                oj(path, "results.html"))
+        )
+        os.system('rm \'{}\''.format(sim_rmd))
+        print("created rmd of simulation results successfully!")
 # %%
