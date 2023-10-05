@@ -43,6 +43,35 @@ def locomp(X, y, fit, refit=False, importance_col="pval_onesided", **kwargs):
     locomp_scores = locomp_scores.rename(columns={importance_col: "importance"})
     return locomp_scores
 
+
+def mp_importance(X, y, fit, refit=False, rank=False, **kwargs):
+    """
+    Wrapper around Minipatch estimator to get feature importance scores
+    :param X:
+    :param y:
+    :param fit:
+    :param refit:
+    :param importance_fn:
+    :param rank:
+    :param kwargs:
+    :return:
+    """
+    if refit:
+        if isinstance(fit, RegressorMixin):
+            MP = MinipatchRegressor
+        elif isinstance(fit, ClassifierMixin):
+            MP = MinipatchClassifier
+        else:
+            raise ValueError("Unknown task.")
+        mp_model = MP(**kwargs)
+        mp_model.fit(X, y)
+    else:
+        mp_model = copy.deepcopy(fit)
+
+    mp_feature_importances = mp_model.get_feature_importance(rank=rank)
+    return mp_feature_importances
+
+
 def tree_mdi_plus_ensemble(X, y, fit, scoring_fns="auto", **kwargs):
     """
     Wrapper around MDI+ object to get feature importance scores
