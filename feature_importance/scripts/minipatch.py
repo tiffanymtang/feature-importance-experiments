@@ -292,8 +292,12 @@ class _MinipatchBase(BaseEstimator):
             self.feature_importances_ = np.nanmean(importances, axis=1)
         if rank:
             ranked_importances = np.apply_along_axis(
-                lambda x: rankdata(-x, nan_policy='omit'), 0, importances
+                lambda x: rankdata_nan(-x), 0, importances
             )
+            # nan_policy='omit' below requires upgraded python and scipy versions
+            # ranked_importances = np.apply_along_axis(
+            #     lambda x: rankdata(-x, nan_policy='omit'), 0, importances
+            # )
             result = np.nanmean(ranked_importances, axis=1)
         else:
             result = self.feature_importances_
@@ -751,3 +755,23 @@ class MinipatchClassifier(_MinipatchBase, ClassifierMixin):
                 score[idx] = np.abs(1 - y_pred[idx][y_true[idx]])
             return score
         return scoring_fn
+
+
+def rankdata_nan(x):
+    """
+    Rank data, omitting NaN values.
+
+    Parameters
+    ----------
+    x : ndarray of shape (n_samples,)
+        The data to rank.
+
+    Returns
+    -------
+    ranks : ndarray of shape (n_samples,)
+        The ranks.
+    """
+    ranks = np.zeros(x.shape)
+    ranks[~np.isnan(x)] = rankdata(x[~np.isnan(x)])
+    ranks[np.isnan(x)] = np.nan
+    return ranks
